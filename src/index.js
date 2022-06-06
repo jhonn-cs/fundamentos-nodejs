@@ -1,80 +1,141 @@
+const { response } = require("express");
 const express = require("express");
 const { json } = require("express/lib/response");
-const { v4: uuidv4 } = require("uuid")
+const { v4: uuid } = require("uuid");
 
 const app = express();
 
 app.use(express.json());
 
-const quadras = [];
+const customers = [];
 
-function verificarQuadraExistente(request, response, next) {
-    const { id } = request.headers;
+function verifyIfExistsAccountCPF(request, response, next) {
+    const { cpf } = request.headers;
 
-    const quadra = quadras.find(q => q.id === id);
-    if (!quadra)
-        return response.status(400).json({ message: "Quadra não encontrada." });
+    const customer = customers.find(c => c.cpf === cpf);
 
-    request.quadra = quadra;
+    if (!customer)
+        return response.status(400).json({ error: "Customer not found." })
+
+    request.customer = customer;
 
     return next();
 }
 
-app.get("/quadras", (request, response) => {
-    const { name } = request.query;
+function getBalance(statement) {
+    const balance = statement.reduce((acc, operation) => {
+        if (operation.type === "credit")
+            return acc + operation.amount;
+        else
+            return acc - operation.amount;
+    }, 0);
 
-    if (name) {
-        const quadra = quadras.find(q => q.name === name);
-        return response.json(quadra)
-    }
+    return balance;
+}
 
-    return response.json(quadras);
-});
+app.post("/account", (request, response) => {
+    const { cpf, name } = request.body;
 
-app.get("/quadras/:id", (request, response) => {
-    const { id } = request.params;
-    return response.json({})
-});
+    const customerAlreadyExists = customers.some(
+        (c) => c.cpf === cpf
+    );
 
-app.post("/quadras", (request, response) => {
-    const id = uuidv4();
-    const { name, description } = request.body;
+    if (customerAlreadyExists)
+        return response.status(400).json({ error: "Customer already exists." });
 
-    if (!name)
-        return response.status(400).json({ message: "Nome da quadra é obrigatório." });
-
-    const quadraExistente = quadras.some((quadra) => quadra.name === name);
-    if (quadraExistente)
-        return response.status(400).json({ message: "Nome já cadastrado para uma quadra." });
-
-    quadras.push({
-        id,
-        name,
-        description
+    customers.push({
+        id: uuid(),
+        cpf: cpf,
+        name: name,
+        statement: []
     });
+
+    response.status(201).send();
+});
+
+app.get("/statement", verifyIfExistsAccountCPF, (request, response) => {
+    const { customer } = request;
+    return response.json(customer.statement);
+});
+
+app.post("/deposit", verifyIfExistsAccountCPF, (request, response) => {
+    const { description, amount } = request.body;
+
+    const { customer } = request;
+
+    const statementOperation = {
+        description: description,
+        amount: amount,
+        created_at: new Date(),
+        type: "credit"
+    };
+
+    customer.statement.push(statementOperation);
 
     return response.status(201).send();
 });
 
-app.put("/quadras/:id", verificarQuadraExistente, (request, response) => {
-    const { name, description } = request.body;
-    const { quadra } = request;
+app.post("/withdraw", verifyIfExistsAccountCPF, (request, response) => {
+    const { amount } = request.body;
+    const { customer } = request;
 
-    quadra.name = name;
-    quadra.description = description;
+    const balance = getBalance(customer.statement);
 
-    const index = quadras.findIndex(q => q.id === quadra.id);
-    quadras[index] = quadra;
+    if (balance < amount)
+        return response.status(400).json({ error: "Insufficient funds." });
 
-    return response.send();
+    const statementOperation = {
+        amount: amount,
+        created_at: new Date(),
+        type: "debit"
+    };
+
+    customer.statement.push(statementOperation);
+
+    return response.status(201).send();
 });
 
-app.delete("/quadras/:id", verificarQuadraExistente, (resquest, response) => {
-    const {id} = request.params;
+app.get("/statement/:date", verifyIfExistsAccountCPF, (request, response) => {
+    const { date } = request.query;
+    const { customer } = request;
 
-    quadras = quadras.filter((value, index, array)=> value.id !== id);
+    const dateFormat = new Date(date + "00:00");
 
-    return response.send();
-})
+    const statement = customers.statement.filter(
+        (statement) => c.statement.created_at.toDateString === dateFormat.toDateString())
+
+    return response.json(statement);
+});
+
+app.put("/account", verifyIfExistsAccountCPF, (request, response) => {
+    const { name } = request.body;
+    const { customer } = request;
+
+    customer.name = name;
+
+    return response.status(201).send();
+});
+
+app.get("/account", verifyIfExistsAccountCPF, (request, response) => {
+    const { customer } = request;
+
+    return response.json(customer);
+});
+
+app.delete("/account", verifyIfExistsAccountCPF, (request, response) => {
+    const { customer } = request;
+
+    customers.splice(customer, 1);
+
+    return response.status(200).json(customers);
+});
+
+app.get("/balance", verifyIfExistsAccountCPF, (request, response) => {
+    const { customer } = request;
+
+    const balance = getBalance(customer.statement);
+
+    return response.json(balance);
+});
 
 app.listen(3333);
